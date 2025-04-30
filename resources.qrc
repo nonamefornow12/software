@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/">
+        <file>assets/fonts/MavenPro-VariableFont_wght.ttf</file>
+        <file>assets/home.svg</file>
+        <file>assets/vpn.svg</file>
+        <file>assets/Security.svg</file>
+        <file>assets/Network.svg</file>
+        <file>assets/Settings.svg</file>
+        <file>assets/Profile.svg</file>
+        <file>assets/Subscription.svg</file>
+    </qresource>
+</RCC>
