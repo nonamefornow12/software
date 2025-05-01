@@ -20,6 +20,7 @@
 #include <QPropertyAnimation>
 #include <QParallelAnimationGroup>
 #include <QFontDatabase>
+#include <QResizeEvent>
 
 // Helper class to render SVG
 class SvgPainter : public QObject
@@ -64,6 +65,7 @@ protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override; // This was missing an implementation
 
 private:
     void setupUi();
@@ -121,11 +123,14 @@ private:
     QPropertyAnimation *minBtnAnim;
     QPropertyAnimation *iconAnim;
 
-    // For window dragging
-    QPoint dragPosition;
-    // SVG Content
+    // SVG content
     QString minimizeSvgContent;
     QString expandSvgContent;
+    QString homeSvgContent;
+    QString homeActiveSvgContent;
+
+    // For window dragging
+    QPoint dragPosition;
 };
 
 #endif // MAINWINDOW_H
