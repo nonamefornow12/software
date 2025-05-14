@@ -19,9 +19,11 @@
 #include <QEasingCurve>
 #include <QFile>
 #include <QResizeEvent>
+#include <QImage>
+#include <QIcon>
 
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent), networkManager(new QNetworkAccessManager(this)), currentTab("Dashboard")
+    : QMainWindow(parent), networkManager(new QNetworkAccessManager(this)), currentTab("Status")
 {
     // Remove title bar but keep window frame
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -41,31 +43,34 @@ MainWindow::MainWindow(QWidget *parent)
     minimizeSvgContent =
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
         "<svg class=\"w-6 h-6 text-gray-800 dark:text-white\" aria-hidden=\"true\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" fill=\"none\" viewBox=\"0 0 24 24\">"
-        "  <path stroke=\"black\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M20 12H8m12 0-4 4m4-4-4-4M9 4H7a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h2\" transform=\"scale(-1, 1) translate(-24, 0)\"/>"
+        "  <path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M20 12H8m12 0-4 4m4-4-4-4M9 4H7a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h2\" transform=\"scale(-1, 1) translate(-24, 0)\"/>"
         "</svg>";
 
     expandSvgContent =
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
         "<svg class=\"w-6 h-6 text-gray-800 dark:text-white\" aria-hidden=\"true\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" fill=\"none\" viewBox=\"0 0 24 24\">"
-        "  <path stroke=\"black\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M16 12H4m12 0-4 4m4-4-4-4m3-4h2a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-2\"/>"
+        "  <path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M16 12H4m12 0-4 4m4-4-4-4m3-4h2a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-2\"/>"
         "</svg>";
 
-    // Define the updated home.svg content
-    homeSvgContent =
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-        "<svg class=\"w-6 h-6 text-gray-800 dark:text-white\" aria-hidden=\"true\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" fill=\"none\" viewBox=\"0 0 24 24\">"
-        "  <path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1\" d=\"M6 8h.01M9 8h.01M12 8h.01M4 11h16M4 19h16a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1Z\"/>"
+    // New FREE subscription badge SVG
+    freeSubscriptionSvgContent =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>"
+        "<svg width=\"60\" height=\"32\" xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\">"
+        "  <rect x=\"0\" y=\"0\" width=\"60\" height=\"32\" rx=\"8\" ry=\"8\" fill=\"black\"/>"
+        "  <text x=\"50%\" y=\"50%\" dominant-baseline=\"middle\" text-anchor=\"middle\""
+        "        fill=\"white\" font-size=\"14\" font-family=\"Arial, sans-serif\" font-weight=\"900\">"
+        "    FREE"
+        "  </text>"
         "</svg>";
 
-    // Define the updated home-active.svg content
-    homeActiveSvgContent =
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-        "<svg class=\"w-6 h-6 text-gray-800 dark:text-white\" aria-hidden=\"true\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" fill=\"currentColor\" viewBox=\"0 0 24 24\">"
-        "  <path fill-rule=\"evenodd\" d=\"M4 4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4Zm16 7H4v7h16v-7ZM5 8a1 1 0 0 1 1-1h.01a1 1 0 0 1 0 2H6a1 1 0 0 1-1-1Zm4-1a1 1 0 0 0 0 2h.01a1 1 0 0 0 0-2H9Zm2 1a1 1 0 0 1 1-1h.01a1 1 0 1 1 0 2H12a1 1 0 0 1-1-1Z\" clip-rule=\"evenodd\"/>"
-        "</svg>";
+    // Initialize collapsedContainer to nullptr
+    collapsedContainer = nullptr;
 
     // Setup custom fonts
     setupFonts();
+
+    // Pre-render the minimize/expand buttons for crisp display
+    prepareMinimizeButtonImages();
 
     setupUi();
     createSidebar();
@@ -74,10 +79,17 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Install event filter to resize frame when window resizes
     installEventFilter(this);
+
+    // Store exact profile position immediately and again after full initialization
+    QTimer::singleShot(0, this, &MainWindow::storeProfilePosition);
+    QTimer::singleShot(500, this, &MainWindow::storeProfilePosition);
 }
 
 MainWindow::~MainWindow()
 {
+    if (collapsedContainer) {
+        delete collapsedContainer;
+    }
 }
 
 void MainWindow::setupFonts()
@@ -105,6 +117,55 @@ void MainWindow::setupFonts()
     } else {
         qDebug() << "Poppins font file not found at:" << fontPath;
     }
+}
+
+void MainWindow::prepareMinimizeButtonImages()
+{
+    // Calculate exact target sizes based on device pixel ratio
+    int baseSize = 24;
+    int renderSize = baseSize * 2;  // Render at 2x the base size for high quality
+
+    // For the expand SVG (used in collapsed mode)
+    QSvgRenderer expandRenderer(expandSvgContent.toUtf8());
+    QImage expandImage(renderSize, renderSize, QImage::Format_ARGB32_Premultiplied);
+    expandImage.fill(Qt::transparent);
+
+    QPainter expandPainter(&expandImage);
+    expandPainter.setRenderHint(QPainter::Antialiasing, true);
+    expandPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    // Removed HighQualityAntialiasing as it's not available in your Qt version
+    expandRenderer.render(&expandPainter, QRectF(0, 0, renderSize, renderSize));
+    expandPainter.end();
+
+    // Convert to pixmap with smooth scaling
+    QPixmap expandRaw = QPixmap::fromImage(expandImage);
+    expandButtonImage = expandRaw.scaled(
+        baseSize, baseSize,
+        Qt::IgnoreAspectRatio,
+        Qt::SmoothTransformation
+        );
+    expandButtonImage.setDevicePixelRatio(qApp->devicePixelRatio());
+
+    // For the minimize SVG (used in expanded mode)
+    QSvgRenderer minimizeRenderer(minimizeSvgContent.toUtf8());
+    QImage minimizeImage(renderSize, renderSize, QImage::Format_ARGB32_Premultiplied);
+    minimizeImage.fill(Qt::transparent);
+
+    QPainter minimizePainter(&minimizeImage);
+    minimizePainter.setRenderHint(QPainter::Antialiasing, true);
+    minimizePainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    // Removed HighQualityAntialiasing as it's not available in your Qt version
+    minimizeRenderer.render(&minimizePainter, QRectF(0, 0, renderSize, renderSize));
+    minimizePainter.end();
+
+    // Convert to pixmap with smooth scaling
+    QPixmap minimizeRaw = QPixmap::fromImage(minimizeImage);
+    minimizeButtonImage = minimizeRaw.scaled(
+        baseSize, baseSize,
+        Qt::IgnoreAspectRatio,
+        Qt::SmoothTransformation
+        );
+    minimizeButtonImage.setDevicePixelRatio(qApp->devicePixelRatio());
 }
 
 void MainWindow::setupUi()
@@ -154,7 +215,7 @@ void MainWindow::setupUi()
 
     // Create sidebar layout with perfect spacing
     sidebarLayout = new QVBoxLayout(sidebarFrame);
-    sidebarLayout->setContentsMargins(10, 25, 8, 15);  // Adjusted margins to move everything a bit to right and down
+    sidebarLayout->setContentsMargins(10, 15, 8, 15);  // Adjusted top margin to 15px instead of 25px
     sidebarLayout->setSpacing(9);  // Perfect vertical spacing
 
     // Add frames to main layout
@@ -190,9 +251,11 @@ QPushButton* MainWindow::createMenuButton(const QString &icon, const QString &te
         "   background-color: #f8f8f8;" // Always visible light grey background like in image
         "   padding: 8px;" // Reduced padding
         "   margin: 0px;"
+        "   margin-left: 2px;" // Move icon a tiny bit to the right
         "}"
         "QPushButton:hover { background-color: #f0f0f0; }"
         "QPushButton:pressed { background-color: #e8e8e8; }"
+        "QPushButton:focus { outline: none; border: none; }" // Prevent blue focus outline
         );
 
     button->setCursor(Qt::PointingHandCursor);
@@ -200,69 +263,53 @@ QPushButton* MainWindow::createMenuButton(const QString &icon, const QString &te
     // Connect the button's click signal to our handler
     connect(button, &QPushButton::clicked, this, &MainWindow::onMenuButtonClicked);
 
-    // Use the original icon path for initial rendering
-    QSvgRenderer* renderer;
+    // Check if the file exists
+    QFileInfo check_file(normalIcon);
+    if (!check_file.exists()) {
+        qDebug() << "Initial icon file not found:" << normalIcon;
+        return button; // Return early to avoid crashes
+    }
 
+    // Different rendering approaches for different icons
+    QSize displaySize = isHomeIcon ? QSize(32, 32) : QSize(28, 28);
+
+    // Set a bigger render size for extra quality
+    QSize renderSize = isHomeIcon ? QSize(48, 48) : QSize(42, 42);
+
+    // Use extra high-quality rendering approach for home icon
     if (isHomeIcon) {
-        // Use the directly defined home SVG content
-        renderer = new QSvgRenderer(homeSvgContent.toUtf8(), button);
+        // Create a high-res render of the SVG
+        QSvgRenderer renderer(normalIcon);
+        QImage image(renderSize, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        renderer.render(&painter);
+        painter.end();
+
+        // Set the icon with downscaled image for better quality
+        QPixmap pixmap = QPixmap::fromImage(image);
+        button->setIcon(QIcon(pixmap));
     } else {
-        // Check if the file exists
-        QFileInfo check_file(normalIcon);
-        if (!check_file.exists()) {
-            qDebug() << "Initial icon file not found:" << normalIcon;
-            return button; // Return early to avoid crashes
-        }
-        renderer = new QSvgRenderer(normalIcon);
+        // Standard rendering for other icons
+        QSvgRenderer renderer(normalIcon);
+        QPixmap pixmap(renderSize);
+        pixmap.fill(Qt::transparent);
+
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        renderer.render(&painter, QRectF(0, 0, pixmap.width(), pixmap.height()));
+        painter.end();
+
+        button->setIcon(QIcon(pixmap));
     }
 
-    // Create a smaller fixed size viewport for the icon - Home icon slightly bigger
-    QSize iconSize;
-    if (isHomeIcon) {
-        iconSize = QSize(30, 30); // Home icon is slightly bigger
-    } else {
-        iconSize = QSize(28, 28); // Normal size for other icons
-    }
-
-    // High DPI support
-    qreal dpr = qApp->devicePixelRatio();
-    QPixmap pixmap(iconSize * dpr);
-    pixmap.fill(Qt::transparent);
-    pixmap.setDevicePixelRatio(dpr);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-
-    // Get the original SVG viewBox
-    QRectF viewBox = renderer->viewBoxF();
-
-    // Scale and center the SVG within our icon size
-    qreal xScale = iconSize.width() / viewBox.width();
-    qreal yScale = iconSize.height() / viewBox.height();
-    qreal scaleFactor = qMin(xScale, yScale) * 0.9; // 90% of max scale to ensure full visibility
-
-    // Center the SVG in the target icon area
-    qreal xOffset = (iconSize.width() - (viewBox.width() * scaleFactor)) / 2;
-    qreal yOffset = (iconSize.height() - (viewBox.height() * scaleFactor)) / 2;
-
-    // Apply transformations to show the entire SVG
-    painter.translate(xOffset, yOffset);
-    painter.scale(scaleFactor, scaleFactor);
-
-    // Render the entire SVG
-    renderer->render(&painter, QRectF(0, 0, viewBox.width(), viewBox.height()));
-    painter.end();
-
-    // Set icon
-    button->setIcon(QIcon(pixmap));
-    button->setIconSize(iconSize);
-    button->setProperty("iconSize", iconSize);
-
-    // Clean up if we created a renderer directly
-    if (isHomeIcon) {
-        delete renderer;
-    }
+    button->setIconSize(displaySize);
+    button->setProperty("iconSize", displaySize);
+    button->setProperty("renderSize", renderSize);
 
     return button;
 }
@@ -283,66 +330,52 @@ void MainWindow::onMenuButtonClicked()
     button->setProperty("isActive", isActive);
 
     // Get the icon size from the button's property
-    QSize iconSize = button->property("iconSize").toSize();
+    QSize displaySize = button->property("iconSize").toSize();
+    QSize renderSize = button->property("renderSize").toSize();
+    bool isHomeIcon = (tabName == "Status");
 
-    // Check if this is the home button (Dashboard)
-    bool isHome = (tabName == "Dashboard");
+    // Get the appropriate icon based on the active state
+    QString iconPath = button->property("activeIcon").toString();
 
-    // Create a renderer for the active icon
-    QSvgRenderer* renderer;
-
-    if (isHome) {
-        // Use our custom home active SVG
-        renderer = new QSvgRenderer(homeActiveSvgContent.toUtf8());
-    } else {
-        // Get the appropriate icon based on the active state
-        QString iconPath = button->property("activeIcon").toString();
-
-        // Check if file exists before trying to render it
-        QFileInfo check_file(iconPath);
-        if (!check_file.exists()) {
-            qDebug() << "Icon file not found:" << iconPath;
-            return;
-        }
-
-        renderer = new QSvgRenderer(iconPath);
+    // Check if file exists before trying to render it
+    QFileInfo check_file(iconPath);
+    if (!check_file.exists()) {
+        qDebug() << "Icon file not found:" << iconPath;
+        return;
     }
 
-    // High DPI support
-    qreal dpr = qApp->devicePixelRatio();
-    QPixmap pixmap(iconSize * dpr);
-    pixmap.fill(Qt::transparent);
-    pixmap.setDevicePixelRatio(dpr);
+    // Use extra high-quality rendering approach for home icon
+    if (isHomeIcon) {
+        // Create a high-res render of the SVG
+        QSvgRenderer renderer(iconPath);
+        QImage image(renderSize, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
 
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        renderer.render(&painter);
+        painter.end();
 
-    // Get the original SVG viewBox
-    QRectF viewBox = renderer->viewBoxF();
+        // Set the icon with downscaled image for better quality
+        QPixmap pixmap = QPixmap::fromImage(image);
+        button->setIcon(QIcon(pixmap));
+    } else {
+        // Standard rendering for other icons
+        QSvgRenderer renderer(iconPath);
+        QPixmap pixmap(renderSize);
+        pixmap.fill(Qt::transparent);
 
-    // Scale and center the SVG within our icon size
-    qreal xScale = iconSize.width() / viewBox.width();
-    qreal yScale = iconSize.height() / viewBox.height();
-    qreal scaleFactor = qMin(xScale, yScale) * 0.9; // 90% of max scale to ensure full visibility
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        renderer.render(&painter);
+        painter.end();
 
-    // Center the SVG in the target icon area
-    qreal xOffset = (iconSize.width() - (viewBox.width() * scaleFactor)) / 2;
-    qreal yOffset = (iconSize.height() - (viewBox.height() * scaleFactor)) / 2;
+        button->setIcon(QIcon(pixmap));
+    }
 
-    // Apply transformations to show the entire SVG
-    painter.translate(xOffset, yOffset);
-    painter.scale(scaleFactor, scaleFactor);
-
-    // Render the entire SVG
-    renderer->render(&painter, QRectF(0, 0, viewBox.width(), viewBox.height()));
-    painter.end();
-
-    // Update the icon
-    button->setIcon(QIcon(pixmap));
-
-    // Clean up
-    delete renderer;
+    button->setIconSize(displaySize);
 }
 
 void MainWindow::onMenuTextClicked()
@@ -360,118 +393,61 @@ void MainWindow::activateTab(const QString &tabName)
     // First, reset all buttons to their normal state
     foreach (const QString &key, menuButtons.keys()) {
         QPushButton* btn = menuButtons[key];
-        QString normalIcon = btn->property("normalIcon").toString();
-        bool isHome = (key == "Dashboard");
+        bool isHomeIcon = (key == "Status");
+        bool isCurrentTab = (key == tabName);
 
-        // Only change buttons that aren't the current one
-        if (key != tabName) {
-            btn->setProperty("isActive", false);
+        QSize displaySize = btn->property("iconSize").toSize();
+        QSize renderSize = btn->property("renderSize").toSize();
 
-            QSize iconSize = btn->property("iconSize").toSize();
-            QSvgRenderer* renderer;
-
-            if (isHome) {
-                // Use the home SVG content
-                renderer = new QSvgRenderer(homeSvgContent.toUtf8());
-            } else {
-                QFileInfo check_file(normalIcon);
-                if (!check_file.exists()) {
-                    continue; // Skip if file not found
-                }
-                renderer = new QSvgRenderer(normalIcon);
-            }
-
-            // High DPI support
-            qreal dpr = qApp->devicePixelRatio();
-            QPixmap pixmap(iconSize * dpr);
-            pixmap.fill(Qt::transparent);
-            pixmap.setDevicePixelRatio(dpr);
-
-            QPainter painter(&pixmap);
-            painter.setRenderHint(QPainter::Antialiasing, true);
-            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-
-            // Get the original SVG viewBox
-            QRectF viewBox = renderer->viewBoxF();
-
-            // Scale and center the SVG within our icon size
-            qreal xScale = iconSize.width() / viewBox.width();
-            qreal yScale = iconSize.height() / viewBox.height();
-            qreal scaleFactor = qMin(xScale, yScale) * 0.9; // 90% of max scale to ensure full visibility
-
-            // Center the SVG in the target icon area
-            qreal xOffset = (iconSize.width() - (viewBox.width() * scaleFactor)) / 2;
-            qreal yOffset = (iconSize.height() - (viewBox.height() * scaleFactor)) / 2;
-
-            // Apply transformations to show the entire SVG
-            painter.translate(xOffset, yOffset);
-            painter.scale(scaleFactor, scaleFactor);
-
-            // Render the entire SVG
-            renderer->render(&painter, QRectF(0, 0, viewBox.width(), viewBox.height()));
-            painter.end();
-
-            // Update the icon
-            btn->setIcon(QIcon(pixmap));
-
-            // Clean up
-            delete renderer;
+        // Determine which icon file to use
+        QString iconPath;
+        if (isCurrentTab) {
+            iconPath = btn->property("activeIcon").toString();
         } else {
-            // Set the active state for the current button
-            btn->setProperty("isActive", true);
+            iconPath = btn->property("normalIcon").toString();
+        }
 
-            // Get the appropriate icon based on the active state
-            QSize iconSize = btn->property("iconSize").toSize();
-            QSvgRenderer* renderer;
+        // Set the active state property
+        btn->setProperty("isActive", isCurrentTab);
 
-            if (isHome) {
-                // Use the home active SVG content
-                renderer = new QSvgRenderer(homeActiveSvgContent.toUtf8());
-            } else {
-                QString activeIcon = btn->property("activeIcon").toString();
-                QFileInfo check_file(activeIcon);
-                if (!check_file.exists()) {
-                    continue; // Skip if file not found
-                }
-                renderer = new QSvgRenderer(activeIcon);
-            }
+        // Check if file exists before continuing
+        QFileInfo check_file(iconPath);
+        if (!check_file.exists()) {
+            continue; // Skip if file not found
+        }
 
-            // High DPI support
-            qreal dpr = qApp->devicePixelRatio();
-            QPixmap pixmap(iconSize * dpr);
+        // Use extra high-quality rendering approach for home icon
+        if (isHomeIcon) {
+            // Create a high-res render of the SVG
+            QSvgRenderer renderer(iconPath);
+            QImage image(renderSize, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+
+            QPainter painter(&image);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            renderer.render(&painter);
+            painter.end();
+
+            // Set the icon with downscaled image for better quality
+            QPixmap pixmap = QPixmap::fromImage(image);
+            btn->setIcon(QIcon(pixmap));
+        } else {
+            // Standard rendering for other icons
+            QSvgRenderer renderer(iconPath);
+            QPixmap pixmap(renderSize);
             pixmap.fill(Qt::transparent);
-            pixmap.setDevicePixelRatio(dpr);
 
             QPainter painter(&pixmap);
             painter.setRenderHint(QPainter::Antialiasing, true);
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-
-            // Get the original SVG viewBox
-            QRectF viewBox = renderer->viewBoxF();
-
-            // Scale and center the SVG within our icon size
-            qreal xScale = iconSize.width() / viewBox.width();
-            qreal yScale = iconSize.height() / viewBox.height();
-            qreal scaleFactor = qMin(xScale, yScale) * 0.9; // 90% of max scale to ensure full visibility
-
-            // Center the SVG in the target icon area
-            qreal xOffset = (iconSize.width() - (viewBox.width() * scaleFactor)) / 2;
-            qreal yOffset = (iconSize.height() - (viewBox.height() * scaleFactor)) / 2;
-
-            // Apply transformations to show the entire SVG
-            painter.translate(xOffset, yOffset);
-            painter.scale(scaleFactor, scaleFactor);
-
-            // Render the entire SVG
-            renderer->render(&painter, QRectF(0, 0, viewBox.width(), viewBox.height()));
+            renderer.render(&painter);
             painter.end();
 
-            // Update the icon
             btn->setIcon(QIcon(pixmap));
-
-            // Clean up
-            delete renderer;
         }
+
+        btn->setIconSize(displaySize);
     }
 
     // Update the current tab
@@ -494,25 +470,17 @@ QWidget* MainWindow::createFreeSubscriptionBadge(bool small)
 {
     // Create a custom widget to render the FREE badge using SVG
     QWidget* badgeWidget = new QWidget();
-    badgeWidget->setFixedSize(small ? 40 : 70, small ? 20 : 30);
-
-    // SVG content for FREE badge
-    QString svgContent =
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"70\" height=\"30\" viewBox=\"0 0 70 30\">"
-        "  <rect x=\"5\" y=\"5\" width=\"60\" height=\"20\" rx=\"8\" ry=\"8\" stroke=\"black\" stroke-width=\"2\" fill=\"white\"/>"
-        "  <text x=\"50%\" y=\"50%\" font-family=\"Arial\" font-size=\"12\" text-anchor=\"middle\" dy=\".3em\" fill=\"black\" stroke=\"black\" stroke-width=\"1\">FREE</text>"
-        "</svg>";
+    badgeWidget->setFixedSize(small ? 40 : 60, small ? 20 : 32); // Size adjusted to match the new SVG
 
     // Create a layout for the container
     QVBoxLayout* layout = new QVBoxLayout(badgeWidget);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // Render the SVG directly
-    QSvgRenderer* renderer = new QSvgRenderer(svgContent.toUtf8(), badgeWidget);
+    // Render the SVG directly using the new SVG content
+    QSvgRenderer* renderer = new QSvgRenderer(freeSubscriptionSvgContent.toUtf8(), badgeWidget);
     QWidget* svgWidget = new QWidget();
-    svgWidget->setFixedSize(small ? 40 : 70, small ? 20 : 30);
+    svgWidget->setFixedSize(small ? 40 : 60, small ? 20 : 32); // Size adjusted to match the new SVG
     svgWidget->installEventFilter(new SvgPainter(renderer, svgWidget));
 
     layout->addWidget(svgWidget);
@@ -522,16 +490,24 @@ QWidget* MainWindow::createFreeSubscriptionBadge(bool small)
 }
 
 // Create a modern divider that matches the sidebar border and subscription panel border
-QWidget* MainWindow::createModernDivider()
+QWidget* MainWindow::createModernDivider(bool minimized)
 {
     // Container for the divider to apply margins
     QWidget* container = new QWidget();
     container->setObjectName("dividerContainer"); // Add an object name for styling
     container->setFixedHeight(16); // Height including space
+    container->setProperty("originalHeight", 16); // Store the original height
 
     // Create layout for container
     QVBoxLayout* layout = new QVBoxLayout(container);
-    layout->setContentsMargins(8, 6, 8, 6); // Horizontal margins to match sidebar padding
+
+    // Adjust margins based on whether it's minimized
+    if (minimized) {
+        layout->setContentsMargins(8, 6, 8, 6);
+        container->setFixedWidth(50); // Narrower width for minimized mode
+    } else {
+        layout->setContentsMargins(8, 6, 8, 6);
+    }
 
     // Create custom divider - exact same color and thickness as sidebar border
     QFrame* divider = new QFrame();
@@ -555,13 +531,13 @@ QWidget* MainWindow::createThreeDotsButton(bool smaller)
     int size = smaller ? 16 : 18; // Using 16px for smaller variant
     container->setFixedSize(size, size);
 
-    // SVG content for three dots
+    // SVG content for three dots with thicker circles
     QString svgContent =
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
         "<svg width=\"" + QString::number(size) + "\" height=\"" + QString::number(size) + "\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">"
-                                                                           "  <path d=\"M12 13C12.5523 13 13 12.5523 13 12C13 11.4477 12.5523 11 12 11C11.4477 11 11 11.4477 11 12C11 12.5523 11.4477 13 12 13Z\" fill=\"black\" stroke=\"black\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>"
-                                                                           "  <path d=\"M12 7C12.5523 7 13 6.55228 13 6C13 5.44772 12.5523 5 12 5C11.4477 5 11 5.44772 11 6C11 6.55228 11.4477 7 12 7Z\" fill=\"black\" stroke=\"black\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>"
-                                                                           "  <path d=\"M12 19C12.5523 19 13 18.5523 13 18C13 17.4477 12.5523 17 12 17C11.4477 17 11 17.4477 11 18C11 18.5523 11.4477 19 12 19Z\" fill=\"black\" stroke=\"black\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>"
+                                                                           "  <circle cx=\"12\" cy=\"12\" r=\"2\" fill=\"black\" stroke=\"black\" stroke-width=\"0.5\"/>"
+                                                                           "  <circle cx=\"12\" cy=\"6\" r=\"2\" fill=\"black\" stroke=\"black\" stroke-width=\"0.5\"/>"
+                                                                           "  <circle cx=\"12\" cy=\"18\" r=\"2\" fill=\"black\" stroke=\"black\" stroke-width=\"0.5\"/>"
                                                                            "</svg>";
 
     // Create a layout for the container
@@ -581,87 +557,103 @@ QWidget* MainWindow::createThreeDotsButton(bool smaller)
     return container;
 }
 
-void MainWindow::updateMinimizeButtonIcon(bool minimized)
+QLabel* MainWindow::createCrispMinimizeButton(bool forExpandedMode)
 {
-    // Create an SVG renderer based on the current state
-    QString svgContent = minimized ? expandSvgContent : minimizeSvgContent;
+    // Increase size based on mode - SLIGHTLY BIGGER for better visibility
+    int baseSize = forExpandedMode ? 22 : 28;  // Increased from 20/26 to 22/28
 
-    // Size for the button
-    int size = 18; // Using a bigger size of 18px
+    // Create a QLabel to hold our pre-rendered image
+    QLabel* label = new QLabel();
+    label->setFixedSize(baseSize, baseSize);
+    label->setCursor(Qt::PointingHandCursor);
 
-    // Create a layout for the container if needed
-    if (minimizeBtn->layout() == nullptr) {
-        QVBoxLayout* layout = new QVBoxLayout(minimizeBtn);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(0);
-    } else {
-        // Clear the existing layout
-        QLayoutItem *item;
-        while ((item = minimizeBtn->layout()->takeAt(0)) != nullptr) {
-            if (item->widget()) {
-                delete item->widget();
-            }
-            delete item;
-        }
+    // Get the pre-rendered pixmap
+    QPixmap pixmap = forExpandedMode ? minimizeButtonImage : expandButtonImage;
+
+    // Scale if necessary with smooth transformation
+    if (pixmap.width() != baseSize) {
+        pixmap = pixmap.scaled(
+            baseSize, baseSize,
+            Qt::IgnoreAspectRatio,
+            Qt::SmoothTransformation
+            );
     }
 
-    // Render the SVG directly
-    QSvgRenderer* minimizeRenderer = new QSvgRenderer(svgContent.toUtf8(), minimizeBtn);
-    QWidget* minimizeSvgWidget = new QWidget();
-    minimizeSvgWidget->setFixedSize(size, size);
-    minimizeSvgWidget->installEventFilter(new SvgPainter(minimizeRenderer, minimizeSvgWidget));
+    // Set the proper device pixel ratio
+    pixmap.setDevicePixelRatio(qApp->devicePixelRatio());
 
-    // Add to layout
-    minimizeBtn->layout()->addWidget(minimizeSvgWidget);
+    // Set the pixmap to the label
+    label->setPixmap(pixmap);
+    label->setAlignment(Qt::AlignCenter);
+
+    // Add hover effect with light gray background
+    label->setStyleSheet(
+        "QLabel {"
+        "   border-radius: " + QString::number(baseSize/2) + "px;"
+                                          "   margin-right: 2px;" // Move a tiny bit to the right
+                                          "}"
+                                          "QLabel:hover {"
+                                          "   background-color: #f0f0f0;"
+                                          "}"
+        );
+
+    // Set up event handling for clicks
+    label->setObjectName(forExpandedMode ? "expandMinimizeBtn" : "collapseMinimizeBtn");
+    label->installEventFilter(this);
+
+    return label;
 }
 
 void MainWindow::createSidebar()
 {
-    // 1. Top Section with Logo and App Name - positioned perfectly
-    QHBoxLayout *topLayout = new QHBoxLayout();
-    topLayout->setSpacing(5); // Reduced spacing to move text more to left
-    topLayout->setContentsMargins(0, 0, 0, 0);
+    // Create a container for the logo
+    QWidget* logoContainer = new QWidget();
+    logoContainer->setFixedHeight(42); // Reduced height to move logo up
 
-    // Logo positioned more right and made larger
-    logoLabel = new QLabel(sidebarFrame);
-    logoLabel->setFixedSize(50, 50); // Further increased size to ensure full logo is visible
+    // Create a layout for logo container - this is always left-aligned
+    QHBoxLayout* logoLayout = new QHBoxLayout(logoContainer);
+    // Set left margin to 5px to move the logo to the left
+    logoLayout->setContentsMargins(5, 0, 0, 0);
+    logoLayout->setSpacing(0);
+
+    // Create the logo
+    logoLabel = new QLabel();
+    logoLabel->setFixedSize(32, 32); // Smaller logo as requested (was 36x36)
     logoLabel->setCursor(Qt::PointingHandCursor);
-    logoLabel->setStyleSheet("QLabel { margin-left: 10px; margin-top: -2px; padding: 3px; }"); // Added padding to show full image
+    logoLabel->installEventFilter(this); // Make logo clickable
 
-    // Make logo clickable to open website
-    logoLabel->installEventFilter(this);
+    // Add logo to layout
+    logoLayout->addWidget(logoLabel);
 
-    // App name changed to "rhynecsecurity" - moved more to left and made bigger
-    appNameLabel = new QLabel("rhynecsecurity", sidebarFrame);
+    // App name - will be hidden in collapsed mode
+    appNameLabel = new QLabel("rhynecsecurity");
     QFont appNameFont = appNameLabel->font();
     appNameFont.setBold(true);
-    appNameFont.setPixelSize(18); // Increased font size
+    appNameFont.setPixelSize(18);
     appNameLabel->setFont(appNameFont);
-    appNameLabel->setStyleSheet("margin-left: 2px;"); // Moved text more to left
+    appNameLabel->setStyleSheet("margin-left: 8px;");
 
-    topLayout->addWidget(logoLabel);
-    topLayout->addWidget(appNameLabel);
-    topLayout->addStretch(1);
+    // Add app name to layout (will be hidden when collapsed)
+    logoLayout->addWidget(appNameLabel);
+    logoLayout->addStretch(1);
 
-    // Removed minimize button from top layout
+    // Add logo container to sidebar
+    sidebarLayout->addWidget(logoContainer);
 
-    sidebarLayout->addLayout(topLayout);
-
-    // No divider after "rhynecsecurity" as requested
-    sidebarLayout->addSpacing(12); // Perfect spacing
+    // Add spacing after logo section
+    sidebarLayout->addSpacing(15);
 
     // Menu items with icons left and text with perfect spacing to match the image
-    QStringList menuItems = {"Dashboard", "VPN", "Security", "Network", "Settings", "Profile"};
+    QStringList menuItems = {"Status", "VPN", "Security", "Network", "Settings", "Profile"};
 
     // Use the full file paths instead of resource paths
     QString assetsPath = QApplication::applicationDirPath() + "/assets/";
     // If you're developing, you might want to use the direct path where your assets are
     QString developmentPath = "C:/Users/sem/Documents/untitled8/assets/";
 
-    // For the home icon specifically, we'll use vpn.svg (copied to a new file as homeFixed.svg)
-    // This is a workaround for the blurry home.svg issue
+    // Using home.svg for the Status icon
     QStringList menuIcons = {
-        developmentPath + "Security.svg", // Using Security.svg instead of home.svg for quality
+        developmentPath + "home.svg",
         developmentPath + "vpn.svg",
         developmentPath + "Security.svg",
         developmentPath + "Network.svg",
@@ -689,20 +681,27 @@ void MainWindow::createSidebar()
         menuItemLayout->setContentsMargins(0, 0, 0, 0);
         menuItemLayout->setSpacing(0);
 
-        // Create container for icon with grey background - SMALLER SIZE
+        // Create container for icon with grey background - SMALLER SIZE and centered
         QWidget* iconContainer = new QWidget();
-        iconContainer->setFixedSize(36, 36); // Reduced from 44x44
-        iconContainer->setStyleSheet("background-color: #f8f8f8; border-radius: 7px;"); // Light grey background with rounder corners
+        iconContainer->setFixedSize(36, 36);
+        iconContainer->setStyleSheet("background-color: #f8f8f8; border-radius: 7px;");
 
         QHBoxLayout* iconLayout = new QHBoxLayout(iconContainer);
-        iconLayout->setContentsMargins(0, 0, 0, 0);
+        // Center the icon within the container
+        iconLayout->setContentsMargins(4, 4, 4, 4); // Equal margins on all sides
         iconLayout->setSpacing(0);
+        iconLayout->setAlignment(Qt::AlignCenter);
 
         // Create icon button (left)
         // Make home icon slightly bigger and special rendering for better quality
-        bool isHomeIcon = (i == 0); // Check if this is the Dashboard (home) icon
+        bool isHomeIcon = (i == 0); // Check if this is the Status (home) icon
         QPushButton* iconBtn = createMenuButton(menuIcons[i], menuItems[i], isHomeIcon);
-        iconBtn->setFixedSize(32, 32); // Reduced from 40x40
+        iconBtn->setFixedSize(isHomeIcon ? 30 : 28, isHomeIcon ? 30 : 28);
+
+        // Prevent focus outline
+        iconBtn->setFocusPolicy(Qt::NoFocus);
+        iconBtn->setStyleSheet(iconBtn->styleSheet() + " QPushButton:focus { outline: none; border: none; }");
+
         iconLayout->addWidget(iconBtn);
 
         // Store the button for later use
@@ -735,21 +734,26 @@ void MainWindow::createSidebar()
         }
     }
 
-    // Activate the Dashboard tab by default
-    activateTab("Dashboard");
+    // Activate the Status tab by default
+    activateTab("Status");
 
-    // Spacer
+    // Spacer - this will be the primary flexible spacer
     QSpacerItem* spacer = new QSpacerItem(20, 40, QSizePolicy::Minimum, QSizePolicy::Expanding);
     sidebarLayout->addItem(spacer);
+
+    // Add extra spacing to move subscription panel a bit further down
+    sidebarLayout->addSpacing(10);
 
     // Create subscription panel - perfectly sized with margins and smaller height
     subscriptionPanel = new QFrame(sidebarFrame);
     subscriptionPanel->setObjectName("subscriptionPanel");
     subscriptionPanel->setFixedHeight(75); // Reduced from 80 to 75 for perfect height
+    subscriptionPanel->setProperty("originalHeight", 75); // Store original height
 
     // Set margins for perfect position (left and right spacing)
-    QHBoxLayout* panelContainer = new QHBoxLayout();
+    panelContainer = new QHBoxLayout();
     panelContainer->setContentsMargins(8, 0, 8, 0);
+    panelContainer->setProperty("originalMargins", QVariant::fromValue(QMargins(8, 0, 8, 0)));
 
     subscriptionPanel->setStyleSheet(
         "QFrame#subscriptionPanel {"
@@ -815,25 +819,59 @@ void MainWindow::createSidebar()
     panelContainer->addWidget(subscriptionPanel);
     sidebarLayout->addLayout(panelContainer);
 
-    // Add spacing before divider
-    sidebarLayout->addSpacing(8);
+    // Small spacing before divider
+    sidebarLayout->addSpacing(15); // Increased from 8 to 15 to move the divider down
 
     // Add thin divider - exact match to sidebar border
-    modernDivider = createModernDivider();
+    modernDivider = createModernDivider(false); // Not minimized initially
     sidebarLayout->addWidget(modernDivider);
 
-    // Profile Section
-    QHBoxLayout* profileLayout = new QHBoxLayout();
-    profileLayout->setContentsMargins(8, 0, 0, 0); // Add left margin for perfect alignment
-    profileLayout->setSpacing(10); // Perfect spacing
+    // Create minimized divider for use in collapsed state
+    minimizedDivider = createModernDivider(true);
+
+    // Add spacing for profile section
+    sidebarLayout->addSpacing(10);
+
+    // Create a container for the minimize button for collapsed mode with a layout
+    minimizeButtonContainer = new QWidget();
+    minimizeButtonContainer->setObjectName("minimizeButtonContainer");
+    QVBoxLayout* minBtnLayout = new QVBoxLayout(minimizeButtonContainer);
+    minBtnLayout->setContentsMargins(0, 0, 0, 0);
+    minBtnLayout->setSpacing(0);
+    minBtnLayout->setAlignment(Qt::AlignCenter);
+
+    // Create ultra-sharp minimize/expand buttons for collapsed mode
+    collapseMinimizeBtn = createCrispMinimizeButton(false);
+    minBtnLayout->addWidget(collapseMinimizeBtn, 0, Qt::AlignCenter);
+
+    // Profile Section - Create a container for the profile
+    QWidget* profileContainer = new QWidget();
+    profileContainer->setFixedHeight(50); // Fixed height for stability
+
+    // Create layout for profile section
+    profileLayout = new QHBoxLayout(profileContainer);
+    profileLayout->setContentsMargins(8, 0, 0, 0);
+    profileLayout->setSpacing(10);
+
+    // Container for profile picture to lock its position
+    profilePicContainer = new QWidget();
+    profilePicContainer->setFixedSize(36, 36);
+    profilePicContainer->setObjectName("profilePicContainer");
+    QVBoxLayout* picLayout = new QVBoxLayout(profilePicContainer);
+    picLayout->setContentsMargins(0, 0, 0, 0);
+    picLayout->setSpacing(0);
 
     // Profile Picture (circular)
     profilePicBtn = new QPushButton();
     profilePicBtn->setFixedSize(36, 36);
+    profilePicBtn->setFocusPolicy(Qt::NoFocus);
     profilePicBtn->setStyleSheet(
         "QPushButton { background-color: #e0e0e0; border-radius: 18px; }"
+        "QPushButton:focus { outline: none; border: none; }" // Prevent blue focus outline
         );
     profilePicBtn->setCursor(Qt::PointingHandCursor);
+
+    picLayout->addWidget(profilePicBtn);
 
     // Connect profile picture to file dialog
     connect(profilePicBtn, &QPushButton::clicked, this, &MainWindow::onProfilePictureClicked);
@@ -846,65 +884,61 @@ void MainWindow::createSidebar()
     usernameLabel->setFont(usernameFont);
 
     // Create a horizontal layout for buttons (side by side)
-    QHBoxLayout* buttonsLayout = new QHBoxLayout();
-    buttonsLayout->setContentsMargins(0, 5, 0, 0); // Added top margin to align with username center
-    buttonsLayout->setSpacing(6); // Space between buttons
-    buttonsLayout->setAlignment(Qt::AlignVCenter); // Align buttons vertically centered
+    buttonsContainer = new QWidget();
+    buttonLayout = new QHBoxLayout(buttonsContainer);
+    buttonLayout->setContentsMargins(0, 5, 0, 0);
+    buttonLayout->setSpacing(6);
+    buttonLayout->setAlignment(Qt::AlignVCenter);
 
-    // Three dots button - now on left of minimize
-    threeDots = createThreeDotsButton(false); // Using regular size (18px)
-    buttonsLayout->addWidget(threeDots);
+    // Three dots button
+    threeDots = createThreeDotsButton(false);
+    buttonLayout->addWidget(threeDots);
 
-    // Minimize button - next to three dots (on right)
-    minimizeBtn = new QWidget();
-    minimizeBtn->setFixedSize(18, 18); // Slightly bigger size
-    minimizeBtn->setCursor(Qt::PointingHandCursor);
-    minimizeBtn->setStyleSheet(
-        "QWidget {"
-        "   background-color: transparent;"
-        "   border-radius: 3px;"
-        "}"
-        "QWidget:hover {"
-        "   background-color: #f0f0f0;"
-        "}"
-        );
-
-    // Create a layout for the minimize button
-    QVBoxLayout* minimizeLayout = new QVBoxLayout(minimizeBtn);
-    minimizeLayout->setContentsMargins(0, 0, 0, 0);
-    minimizeLayout->setSpacing(0);
-
-    // Render the SVG directly using the current state
-    updateMinimizeButtonIcon(isCollapsed);
-
-    // Connect minimize button to the collapse/expand function
-    minimizeBtn->installEventFilter(this);
-
-    buttonsLayout->addWidget(minimizeBtn);
+    // Create ultra-sharp minimize button for expanded mode
+    expandMinimizeBtn = createCrispMinimizeButton(true);
+    buttonLayout->addWidget(expandMinimizeBtn);
 
     // Add widgets to the profile layout
-    profileLayout->addWidget(profilePicBtn);
+    profileLayout->addWidget(profilePicContainer);
     profileLayout->addWidget(usernameLabel, 1);
-    profileLayout->addLayout(buttonsLayout); // Using the horizontal button layout
+    profileLayout->addWidget(buttonsContainer);
 
-    sidebarLayout->addLayout(profileLayout);
+    // Add profile section to sidebar layout
+    sidebarLayout->addWidget(profileContainer);
 
-    // Ensure the minimize button is visible on startup
-    QTimer::singleShot(100, [this]() {
-        updateMinimizeButtonIcon(isCollapsed);
-    });
+    // Store original parent of profile picture
+    originalProfileParent = profilePicContainer->parentWidget();
+}
+
+void MainWindow::storeProfilePosition()
+{
+    // Only capture if not already in collapsed mode
+    if (!isCollapsed && profilePicContainer && !profilePicOrig.contains("y")) {
+        QPoint posRelativeToFrame = profilePicContainer->mapTo(sidebarFrame, QPoint(0, 0));
+
+        // Store in a hash for exact precision
+        profilePicOrig.insert("parent", QVariant::fromValue<QWidget*>(profilePicContainer->parentWidget()));
+        profilePicOrig.insert("x", posRelativeToFrame.x());
+        profilePicOrig.insert("y", posRelativeToFrame.y());
+        profilePicOrig.insert("width", profilePicContainer->width());
+        profilePicOrig.insert("height", profilePicContainer->height());
+
+        qDebug() << "Stored exact profile position:"
+                 << "x=" << profilePicOrig["x"].toInt()
+                 << "y=" << profilePicOrig["y"].toInt();
+    }
 }
 
 void MainWindow::onMinimizeClicked()
 {
+    // Ensure we have position data
+    storeProfilePosition();
+
     if (isCollapsed) {
         expandSidebar();
     } else {
         collapseSidebar();
     }
-
-    // Update the minimize button icon based on the new state
-    updateMinimizeButtonIcon(isCollapsed);
 }
 
 void MainWindow::collapseSidebar()
@@ -912,96 +946,93 @@ void MainWindow::collapseSidebar()
     if (isCollapsed)
         return;
 
-    // Apply the width to the frame BEFORE starting the animation to avoid lag
+    // Make sure we have position data
+    if (!profilePicOrig.contains("y")) {
+        storeProfilePosition();
+    }
+
+    // Apply the width to the frame immediately
     sidebarFrame->setFixedWidth(collapsedSidebarWidth);
 
     isCollapsed = true;
 
-    // Animation for sidebar width
-    QPropertyAnimation *widthAnimation = new QPropertyAnimation(sidebarFrame, "minimumWidth");
-    widthAnimation->setDuration(300);
-    widthAnimation->setStartValue(collapsedSidebarWidth); // Start at already collapsed width
-    widthAnimation->setEndValue(collapsedSidebarWidth);   // End at collapsed width
-    widthAnimation->setEasingCurve(QEasingCurve::OutCubic);
+    // Hide app name but keep the logo visible and positioned
+    appNameLabel->setVisible(false);
 
-    // Hide text labels and other elements that should be hidden in collapsed mode
+    // Hide text labels for menu items
     foreach (QLabel *label, menuTexts.values()) {
         label->setVisible(false);
     }
 
-    // Hide app name
-    appNameLabel->setVisible(false);
+    // Hide username and buttons container but keep profile picture
+    usernameLabel->setVisible(false);
+    buttonsContainer->setVisible(false);
 
-    // Make subscription panel smaller
-    subscriptionPanel->setFixedHeight(50);
+    // Hide the regular divider
+    if (modernDivider) {
+        modernDivider->setVisible(false);
+    }
 
-    // Hide email label
+    // Clean up any previous collapsed container to prevent memory leaks
+    if (collapsedContainer) {
+        delete collapsedContainer;
+        collapsedContainer = nullptr;
+    }
+
+    // Create our stacked layout for the collapsed sidebar elements in the bottom corner
+    QVBoxLayout* collapsedLayout = new QVBoxLayout();
+    collapsedLayout->setContentsMargins(0, 0, 0, 0);
+    collapsedLayout->setSpacing(12); // Uniform spacing between elements
+    collapsedLayout->setAlignment(Qt::AlignHCenter); // Center everything horizontally
+
+    // Get profile position for reference
+    int profileY = profilePicOrig["y"].toInt();
+
+    // Create a container to hold our stacked widgets
+    collapsedContainer = new QWidget(sidebarFrame);
+    collapsedContainer->setLayout(collapsedLayout);
+
+    // Prepare each widget for the collapsed layout
+
+    // 1. Subscription panel
+    subscriptionPanel->setParent(collapsedContainer);
+    subscriptionPanel->setFixedHeight(40);
+    subscriptionPanel->setFixedWidth(60);
+    collapsedLayout->addWidget(subscriptionPanel, 0, Qt::AlignHCenter);
+
+    // Hide email label and dots
     emailLabel->setVisible(false);
-
-    // Hide 3 dots in subscription panel when minimized
     subscriptionDotsBtn->setVisible(false);
 
-    // Resize FREE subscription badge to be small when minimized
+    // Resize FREE subscription badge to be small
     freeSubscriptionLabel->setFixedSize(40, 20);
 
-    // Hide username and three dots
-    usernameLabel->setVisible(false);
-    threeDots->setVisible(false);
+    // 2. Divider
+    minimizedDivider->setParent(collapsedContainer);
+    minimizedDivider->setFixedWidth(50);
+    collapsedLayout->addWidget(minimizedDivider, 0, Qt::AlignHCenter);
 
-    // Move the divider up when sidebar is minimized
-    if (modernDivider) {
-        // Remove the divider from its current position
-        int dividerIndex = sidebarLayout->indexOf(modernDivider);
-        if (dividerIndex != -1) {
-            sidebarLayout->removeWidget(modernDivider);
+    // 3. Minimize button
+    minimizeButtonContainer->setParent(collapsedContainer);
+    minimizeButtonContainer->setFixedSize(28, 28); // Match the new button size
+    collapsedLayout->addWidget(minimizeButtonContainer, 0, Qt::AlignHCenter);
 
-            // Add it back much higher in the layout - immediately after the menu items
-            // Find the Dashboard menu item and insert after the Menu + spacing
-            int dashboardIndex = -1;
-            for (int i = 0; i < sidebarLayout->count(); i++) {
-                QLayoutItem* item = sidebarLayout->itemAt(i);
-                if (QWidget* widget = item->widget()) {
-                    if (QHBoxLayout* layout = widget->findChild<QHBoxLayout*>()) {
-                        for (int j = 0; j < layout->count(); j++) {
-                            if (QWidgetItem* widgetItem = dynamic_cast<QWidgetItem*>(layout->itemAt(j))) {
-                                if (QPushButton* btn = qobject_cast<QPushButton*>(widgetItem->widget())) {
-                                    if (btn->property("tabName").toString() == "Dashboard") {
-                                        dashboardIndex = i;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if (dashboardIndex != -1) break;
-            }
+    // Calculate space needed for the stacked widgets
+    int totalHeight = 40 + 16 + 28 + collapsedLayout->spacing() * 2; // Panel + divider + button + spacings
 
-            // Insert after Profile menu item (which should be the 6th menu item)
-            int insertPosition = dashboardIndex + 6 + 5; // Dashboard + 5 other menu items + 5 spacer items
-            sidebarLayout->insertWidget(insertPosition, modernDivider);
-        }
-    }
+    // Position the container above the profile picture with proper spacing
+    // Moving down a tiny bit (3px)
+    int containerBottom = profileY - 12; // Original was 15, reduced to 12 to move down
+    int containerTop = containerBottom - totalHeight;
 
-    // Move the minimize button to position ABOVE profile picture when collapsed
-    // Detach from layout to position manually
-    minimizeBtn->setParent(sidebarFrame);
+    collapsedContainer->setGeometry(0, containerTop, collapsedSidebarWidth, totalHeight);
+    collapsedContainer->show();
 
-    // Position above profile picture
-    int profileY = profilePicBtn->geometry().y();
-    if (profileY <= 0) { // If profileY not yet properly set
-        profileY = sidebarFrame->height() - 50; // Approximate position
-    }
-    minimizeBtn->setGeometry(collapsedSidebarWidth/2 - 9, profileY - 40, 18, 18);
-    minimizeBtn->raise(); // Bring to front
-    minimizeBtn->show();
-
-    // Ensure the icon is updated right after moving
-    QTimer::singleShot(10, [this]() {
-        updateMinimizeButtonIcon(true);
-    });
-
-    widthAnimation->start(QAbstractAnimation::DeleteWhenStopped);
+    // Position the profile picture
+    int xPos = (collapsedSidebarWidth - profilePicContainer->width()) / 2; // Center horizontally
+    profilePicContainer->setParent(sidebarFrame);
+    profilePicContainer->setGeometry(xPos, profileY, profilePicContainer->width(), profilePicContainer->height());
+    profilePicContainer->show();
 }
 
 void MainWindow::expandSidebar()
@@ -1009,31 +1040,59 @@ void MainWindow::expandSidebar()
     if (!isCollapsed)
         return;
 
-    // Apply the width to the frame BEFORE starting the animation to avoid lag
+    // Apply the width to the frame immediately
     sidebarFrame->setFixedWidth(expandedSidebarWidth);
 
     isCollapsed = false;
 
-    // Animation for sidebar width
-    QPropertyAnimation *widthAnimation = new QPropertyAnimation(sidebarFrame, "minimumWidth");
-    widthAnimation->setDuration(300);
-    widthAnimation->setStartValue(expandedSidebarWidth); // Start at already expanded width
-    widthAnimation->setEndValue(expandedSidebarWidth);   // End at expanded width
-    widthAnimation->setEasingCurve(QEasingCurve::OutCubic);
+    // Clean up the collapsed container
+    if (collapsedContainer) {
+        // Remove widgets from the collapsed container before deleting it
+        subscriptionPanel->setParent(nullptr);
+        minimizedDivider->setParent(nullptr);
+        minimizeButtonContainer->setParent(nullptr);
 
-    // Put the minimize button back in its original position
-    minimizeBtn->setParent(nullptr);
-
-    // Show text labels and other elements that should be visible in expanded mode
-    foreach (QLabel *label, menuTexts.values()) {
-        label->setVisible(true);
+        delete collapsedContainer;
+        collapsedContainer = nullptr;
     }
+
+    // Return profile picture to the exact parent and position from before
+    if (profilePicOrig.contains("parent")) {
+        QWidget* parent = profilePicOrig["parent"].value<QWidget*>();
+        if (parent) {
+            // Temporarily hide to prevent flickering
+            profilePicContainer->hide();
+
+            // Put back in its original parent
+            profilePicContainer->setParent(parent);
+
+            // Reposition it in the layout
+            profileLayout->insertWidget(0, profilePicContainer);
+
+            // Show it again
+            profilePicContainer->show();
+        }
+    }
+
+    // Show the expanded elements
+    modernDivider->setVisible(true);
+    modernDivider->setParent(sidebarFrame); // Ensure it's in the sidebar
 
     // Show app name
     appNameLabel->setVisible(true);
 
-    // Restore subscription panel height
-    subscriptionPanel->setFixedHeight(75);
+    // Show text labels
+    foreach (QLabel *label, menuTexts.values()) {
+        label->setVisible(true);
+    }
+
+    // Put the subscription panel back into its original container
+    panelContainer->addWidget(subscriptionPanel);
+
+    // Restore subscription panel position and size
+    subscriptionPanel->setFixedHeight(75); // Restore to original height
+    subscriptionPanel->setFixedWidth(QWIDGETSIZE_MAX); // Reset the fixed width (used in collapsed mode)
+    panelContainer->setContentsMargins(8, 0, 8, 0);
 
     // Show email label
     emailLabel->setVisible(true);
@@ -1042,69 +1101,14 @@ void MainWindow::expandSidebar()
     subscriptionDotsBtn->setVisible(true);
 
     // Restore FREE subscription badge size
-    freeSubscriptionLabel->setFixedSize(70, 30);
+    freeSubscriptionLabel->setFixedSize(60, 32);
 
-    // Show username and three dots
+    // Show username and buttons container
     usernameLabel->setVisible(true);
-    threeDots->setVisible(true);
+    buttonsContainer->setVisible(true);
 
-    // Move the divider back to its original position
-    if (modernDivider) {
-        // Remove the divider from its current position
-        int dividerIndex = sidebarLayout->indexOf(modernDivider);
-        if (dividerIndex != -1) {
-            sidebarLayout->removeWidget(modernDivider);
-
-            // Add it back to its original position - after subscription panel
-            int subscriptionIndex = -1;
-            for (int i = 0; i < sidebarLayout->count(); i++) {
-                QLayoutItem* item = sidebarLayout->itemAt(i);
-                if (QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(item->layout())) {
-                    for (int j = 0; j < layout->count(); j++) {
-                        if (QWidgetItem* widgetItem = dynamic_cast<QWidgetItem*>(layout->itemAt(j))) {
-                            if (widgetItem->widget() == subscriptionPanel) {
-                                subscriptionIndex = i;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (subscriptionIndex != -1) break;
-            }
-
-            // Insert after subscription panel + spacing
-            if (subscriptionIndex != -1) {
-                sidebarLayout->insertWidget(subscriptionIndex + 2, modernDivider);
-            } else {
-                // Fallback - add to end of layout
-                sidebarLayout->addWidget(modernDivider);
-            }
-        }
-    }
-
-    // Recreate the profile layout with the minimize button
-    QHBoxLayout* profileLayout = (QHBoxLayout*)sidebarLayout->itemAt(sidebarLayout->count()-1)->layout();
-    if (profileLayout) {
-        // Create a horizontal layout for buttons (side by side)
-        QHBoxLayout* buttonsLayout = new QHBoxLayout();
-        buttonsLayout->setContentsMargins(0, 5, 0, 0); // Added top margin to align with username center
-        buttonsLayout->setSpacing(6); // Space between buttons
-        buttonsLayout->setAlignment(Qt::AlignVCenter); // Align buttons vertically centered
-
-        // Add the buttons to the layout
-        buttonsLayout->addWidget(threeDots);
-        buttonsLayout->addWidget(minimizeBtn);
-
-        // Add layout to the profile layout
-        profileLayout->addLayout(buttonsLayout);
-
-        // Ensure the icon is updated after repositioning
-        QTimer::singleShot(10, [this]() {
-            updateMinimizeButtonIcon(false);
-        });
-    }
-
-    widthAnimation->start(QAbstractAnimation::DeleteWhenStopped);
+    // Add minimize button back to buttons container
+    buttonLayout->addWidget(expandMinimizeBtn);
 }
 
 void MainWindow::downloadLogo()
@@ -1123,7 +1127,7 @@ void MainWindow::downloadLogo()
         // Use the local logo file with proper HDPI scaling for crisp rendering
         QPixmap logo(logoPath);
         qreal dpr = qApp->devicePixelRatio();
-        QPixmap hiDpiLogo = logo.scaled(50 * dpr, 50 * dpr, Qt::KeepAspectRatio, Qt::SmoothTransformation); // Increased to 45x45
+        QPixmap hiDpiLogo = logo.scaled(32 * dpr, 32 * dpr, Qt::KeepAspectRatio, Qt::SmoothTransformation); // Reduced to 32x32
         hiDpiLogo.setDevicePixelRatio(dpr);
         logoLabel->setPixmap(hiDpiLogo);
 
@@ -1174,7 +1178,7 @@ void MainWindow::onLogoDownloaded(QNetworkReply *reply)
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
             // Center the logo with some padding to prevent cutting off edges
-            QRect targetRect(5, 5, displaySize.width() - 10, displaySize.height() - 10);
+            QRect targetRect(2, 2, displaySize.width() - 4, displaySize.height() - 4); // Smaller padding for smaller logo
             painter.drawPixmap(targetRect, logo, logo.rect());
             painter.end();
 
@@ -1185,7 +1189,7 @@ void MainWindow::onLogoDownloaded(QNetworkReply *reply)
     } else {
         // Use a fallback image or placeholder
         logoLabel->setText("R");
-        logoLabel->setStyleSheet("QLabel { background-color: #4C4C4C; color: white; border-radius: 25px; text-align: center; }");
+        logoLabel->setStyleSheet("QLabel { background-color: #4C4C4C; color: white; border-radius: 16px; text-align: center; }"); // Smaller radius for smaller logo
         logoLabel->setAlignment(Qt::AlignCenter);
     }
 
@@ -1276,6 +1280,7 @@ void MainWindow::applyProfilePicture(const QString &imagePath)
     profilePicBtn->setText("");  // Clear any text
     profilePicBtn->setStyleSheet(
         "QPushButton { background-color: transparent; border-radius: 18px; }"
+        "QPushButton:focus { outline: none; border: none; }" // Prevent blue focus outline
         );
 }
 
@@ -1308,6 +1313,22 @@ void MainWindow::resizeEvent(QResizeEvent *event)
         }
     }
 
+    // If collapsed, ensure profile picture stays in exact position
+    if (isCollapsed && profilePicContainer && profilePicOrig.contains("y")) {
+        // Use exact stored position for profile picture
+        int profileY = profilePicOrig["y"].toInt();
+        int profileWidth = profilePicOrig["width"].toInt();
+        int profileHeight = profilePicOrig["height"].toInt();
+
+        // Center horizontally but keep exact Y position
+        int xPos = (collapsedSidebarWidth - profileWidth) / 2;
+        profilePicContainer->setGeometry(xPos, profileY, profileWidth, profileHeight);
+    }
+    // Otherwise, capture position if not already done
+    else if (!isCollapsed && profilePicContainer && !profilePicOrig.contains("y")) {
+        QTimer::singleShot(0, this, &MainWindow::storeProfilePosition);
+    }
+
     QMainWindow::resizeEvent(event);
 }
 
@@ -1328,21 +1349,11 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         }
     }
 
-    // Handle minimize button clicks
-    if (obj == minimizeBtn && event->type() == QEvent::MouseButtonRelease) {
+    // Handle clicks on the minimize buttons
+    if ((obj == expandMinimizeBtn || obj == collapseMinimizeBtn) &&
+        event->type() == QEvent::MouseButtonRelease) {
         onMinimizeClicked();
         return true;
-    }
-
-    // If this is a window resize event, resize the border frame
-    if (obj == this && event->type() == QEvent::Resize) {
-        QList<QFrame*> frames = findChildren<QFrame*>();
-        for (QFrame* frame : frames) {
-            if (frame->frameShape() == QFrame::Box) {
-                frame->setGeometry(0, 0, width(), height());
-                break;
-            }
-        }
     }
 
     return QMainWindow::eventFilter(obj, event);
